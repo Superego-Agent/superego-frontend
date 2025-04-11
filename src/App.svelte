@@ -1,0 +1,159 @@
+<script lang="ts">
+import { onMount } from 'svelte';
+import { loadGlobalConstitutions } from './lib/stores/globalConstitutionsStore';
+import Sidebar from './lib/components/Sidebar.svelte';
+import ChatInterface from './lib/components/ChatInterface.svelte';
+import ThemeToggle from './lib/components/ThemeToggle.svelte';
+import { theme } from './lib/stores/theme';
+import { loadLocalConstitutions } from './lib/localConstitutions'; 
+import './lib/styles/theme.css';
+import './lib/styles/dark-theme.css';
+
+import { get } from 'svelte/store';
+import { uiSessions, activeSessionId } from './lib/stores';
+import { createNewSession } from './lib/sessionManager';
+onMount( async () => {
+    try {
+        await Promise.all([
+            loadGlobalConstitutions(), 
+            loadLocalConstitutions() 
+        ]);
+        console.log('Fetched initial global constitutions and loaded local ones.');
+    } catch (error) {
+        console.error("App onMount Error: Failed to initialize constitutions:", error);
+    }
+
+        // --- START: Add Session Initialization Logic ---
+        const currentActiveId = get(activeSessionId);
+        if (currentActiveId === null) {
+            const currentSessions = get(uiSessions);
+            const sessionIds = Object.keys(currentSessions);
+            if (sessionIds.length > 0) {
+                // Activate the first existing session found
+                activeSessionId.set(sessionIds[0]);
+                console.log(`[App.svelte] Activated existing session: ${sessionIds[0]}`);
+            } else {
+                // No sessions exist, create a new one
+                console.log('[App.svelte] No existing sessions found, creating a new one.');
+                createNewSession(); // This function already sets it as active
+            }
+        }
+        // --- END: Add Session Initialization Logic ---
+
+});
+
+</script>
+
+<main class="app-layout">
+    <div class="app-header">
+        <h1 class="app-title">
+            <span class="logo-text">Superego</span>
+            <span class="subtitle">Demo</span>
+        </h1>
+        <div class="theme-toggle-container">
+            <ThemeToggle />
+        </div>
+        
+    </div>
+    <div class="app-content">
+        <Sidebar />
+        <ChatInterface />
+    </div>
+</main>
+
+<style>
+    .app-layout {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        width: 100%;
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        overflow: hidden; /* Prevent layout issues */
+        background-color: var(--bg-primary);
+    }
+
+    .app-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 8px 16px;
+        background-color: var(--bg-elevated);
+        border-bottom: 1px solid var(--input-border);
+        height: 50px;
+        flex-shrink: 0;
+    }
+
+    .app-content {
+        display: flex;
+        flex: 1;
+        overflow: hidden;
+    }
+
+    .app-title {
+        margin: 0;
+        display: flex;
+        align-items: center; /* Changed to horizontal alignment */
+        font-size: 1em; /* Make the entire title smaller */
+    }
+
+    .logo-text {
+        background: linear-gradient(135deg, var(--primary-light), var(--secondary));
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+        font-size: 1em; /* Reduced from 1.4em */
+        font-weight: bold;
+    }
+
+    .subtitle {
+        margin-left: 8px; /* Add space between Superego and Demo */
+        font-size: 0.9em;
+        color: var(--text-secondary);
+        font-weight: normal;
+    }
+
+    :global(body) {
+        margin: 0;
+        padding: 0;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', sans-serif;
+        background-color: var(--bg-primary);
+        color: var(--text-primary);
+        overflow: hidden;
+        position: fixed;
+        width: 100%;
+        height: 100%;
+        touch-action: manipulation;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+    }
+
+    :global(*, *::before, *::after) {
+        box-sizing: border-box;
+    }
+
+    @media (max-width: 768px) {
+        .app-layout {
+            flex-direction: column;
+        }
+    }
+
+    @supports (-webkit-touch-callout: none) {
+        .app-layout {
+            height: -webkit-fill-available;
+        }
+    }
+
+    .theme-toggle-container {
+        margin-left: auto;
+    }
+
+    @media (max-width: 768px) {
+        .app-content {
+            flex-direction: column;
+        }
+    }
+</style>
