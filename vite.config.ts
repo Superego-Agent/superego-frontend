@@ -10,6 +10,9 @@ export default defineConfig({
 			compiler: 'svelte'
 		})
 	],
+	build: {
+        outDir: 'dist'
+      },
   resolve: {
     alias: {
       '$lib': '/src/lib'
