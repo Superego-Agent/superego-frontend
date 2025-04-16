@@ -1,39 +1,54 @@
 <script lang="ts">
-    import { submitConstitution, fetchConstitutionContent } from '../api';
-    import { addLocalConstitution, localConstitutionsStore } from '../localConstitutions';
-    import { globalConstitutions } from '../stores/globalConstitutionsStore';
-    import { createEventDispatcher } from 'svelte';
+
+    import { fetchConstitutionContent, submitConstitution } from '$lib/api/rest.svelte';
+    import { constitutionStore } from '$lib/state/constitutions.svelte'; // Updated import
     import { tick } from 'svelte';
 
-    const dispatch = createEventDispatcher();
+    let { onConstitutionAdded = (detail?: { success: boolean }) => {}, onClose = () => {} } = $props<{
+        onConstitutionAdded?: (detail?: { success: boolean }) => void;
+        onClose?: () => void;
+    }>();
 
-    // Form State
-    let constitutionTitle = '';
-    let constitutionText = '';
-    let submitForReview = false; // Replaces isPrivate, default false
-    let selectedTemplateId: string | null = null; // For the template dropdown
+    // Use the single store instance for global state
+    let availableConstitutions = $derived(constitutionStore.globalHierarchy);
+    let isLoading = $derived(constitutionStore.isLoadingGlobal);
+    let error = $derived(constitutionStore.globalError);
 
-    // Submission State
-    let isSubmitting = false;
-    let submitStatus: { success?: boolean; message?: string } | null = null;
-    let templateLoading = false; // Loading state for template content
+    // --- Component State ---
+    let constitutionTitle = $state('');
+    let constitutionText = $state('');
+    let submitForReview = $state(false); // Replaces isPrivate, default false
+    let selectedTemplateId: string | null = $state(null);
 
+    // Submission & Loading State
+    let isSubmitting = $state(false);
+    let submitStatus: { success?: boolean; message?: string } | null = $state(null);
+    let templateLoading = $state(false);
+
+    // --- Template Handling ---
     // Combine global and local for template dropdown
     type TemplateOption =
-        | { type: 'global'; id: string; title: string }
-        | { type: 'local'; id: string; title: string; text: string }; // Include text for local
+        | { type: 'remote'; id: string; title: string } // 'id' will be relativePath
+        | { type: 'local'; id: string; title: string; text: string }; // 'id' will be localStorageKey
 
-    // Correct reactive declaration syntax
-    $: allConstitutionsForTemplate = [
-        ...$globalConstitutions
-            .filter((c: ConstitutionItem) => c.id !== 'none') // Add type ConstitutionItem
-            .map((c: ConstitutionItem): TemplateOption => ({ type: 'global', id: c.id, title: c.title })), // Add type ConstitutionItem
-        ...$localConstitutionsStore.map((c: LocalConstitution): TemplateOption => ({ type: 'local', id: c.id, title: c.title, text: c.text })) // Add type LocalConstitution
-    ].sort((a, b) => a.title.localeCompare(b.title));
 
-    // Reactive statement to load template when selectedTemplateId changes
-    $: if (selectedTemplateId) {
-        loadTemplateContent(selectedTemplateId);
+
+    // --- Functions ---
+    function flattenHierarchy(hierarchy: ConstitutionHierarchy | null): RemoteConstitutionMetadata[] {
+        if (!hierarchy) {
+            return [];
+        }
+        const constitutions: RemoteConstitutionMetadata[] = [...hierarchy.rootConstitutions];
+        function recurseFolders(folders: ConstitutionFolder[]) {
+            for (const folder of folders) {
+                constitutions.push(...folder.constitutions);
+                if (folder.subFolders && folder.subFolders.length > 0) {
+                    recurseFolders(folder.subFolders);
+                }
+            }
+        }
+        recurseFolders(hierarchy.rootFolders);
+        return constitutions;
     }
 
     async function loadTemplateContent(templateId: string) {
@@ -42,13 +57,13 @@
 
         constitutionTitle = selectedTemplate.title; // Pre-fill title
         templateLoading = true;
-        constitutionText = 'Loading template content...'; // Placeholder while loading
+        constitutionText = 'Loading template content...';
 
         try {
             if (selectedTemplate.type === 'local') {
                 constitutionText = selectedTemplate.text;
-            } else {
-                // Fetch content for global constitutions
+            } else { // type === 'remote'
+                // Fetch content for remote constitutions using relativePath (stored in id)
                 constitutionText = await fetchConstitutionContent(selectedTemplate.id);
             }
         } catch (error) {
@@ -72,11 +87,9 @@
         let submitApiMessage = '';
 
         try {
-            // 1. Always add locally
-            addLocalConstitution(constitutionTitle, constitutionText);
+            constitutionStore.addItem(constitutionTitle, constitutionText); // Use updated store name
             localAddSuccess = true;
 
-            // 2. Optionally submit for review
             if (submitForReview) {
                 const response = await submitConstitution({
                     text: constitutionText,
@@ -86,20 +99,19 @@
                 submitApiMessage = response.message || (submitApiSuccess ? 'Submitted for review.' : 'Submission failed.');
             }
 
-            // Determine overall status
             if (localAddSuccess) {
                  submitStatus = {
                     success: true,
                     message: `Constitution '${constitutionTitle}' saved locally.` + (submitForReview ? ` ${submitApiMessage}` : '')
                 };
-                constitutionTitle = ''; // Clear form
+                constitutionTitle = '';
                 constitutionText = '';
-                selectedTemplateId = null; // Reset dropdown
+                selectedTemplateId = null;
 
-                dispatch('constitutionAdded', { success: true });
+                onConstitutionAdded({ success: true });
 
                 setTimeout(() => {
-                    dispatch('close');
+                    onClose();
                 }, 2500); // Slightly longer delay
             } else {
                  // This case should ideally not happen if addLocalConstitution doesn't throw
@@ -116,12 +128,33 @@
             isSubmitting = false;
         }
     }
+    let allConstitutionsForTemplate = $derived((() => {
+        const remoteConstitutions = flattenHierarchy(constitutionStore.globalHierarchy); // Use updated store name
+        const remoteOptions: TemplateOption[] = remoteConstitutions
+            // .filter(c => c.relativePath !== 'none') // Filtering 'none' might not be needed depending on backend
+            .map((c): TemplateOption => ({ type: 'remote', id: c.relativePath, title: c.title }));
+
+        const localOptions: TemplateOption[] = constitutionStore.localConstitutions.map((c: LocalConstitutionMetadata): TemplateOption => ({ type: 'local', id: c.localStorageKey, title: c.title, text: c.text })); // Use updated store name and add type
+
+        return [...remoteOptions, ...localOptions].sort((a, b) => a.title.localeCompare(b.title));
+    })()); // Immediately invoke the function expression
+    // --- Reactive Logic & Effects ---
+    // Fetch constitutions on component mount using the store's load method
+    // No need to call load() explicitly, the store handles it internally via $effect.pre
+    // globalConstitutionsStore.load();
+
+    // Reactive statement to load template when selectedTemplateId changes
+    $effect(() => {
+        if (selectedTemplateId) {
+            loadTemplateContent(selectedTemplateId);
+        }
+    });
 </script>
 
 <div class="add-constitution">
     <h2>Add New Constitution</h2>
     <div class="form-group">
-        <!-- Template Dropdown -->
+        <!-- === Template Selection === -->
         <div class="form-row">
              <label for="template-select">Use as Template (Optional):</label>
              <select id="template-select" bind:value={selectedTemplateId} disabled={isSubmitting || templateLoading}>
@@ -134,7 +167,7 @@
              </select>
         </div>
 
-         <!-- Title Input -->
+         <!-- === Constitution Title === -->
          <div class="form-row">
             <label for="constitution-title">Title:</label>
             <input
@@ -147,7 +180,7 @@
             />
         </div>
 
-        <!-- Text Area -->
+        <!-- === Constitution Text === -->
         <textarea
             bind:value={constitutionText}
             placeholder="Enter your constitution text here..."
@@ -156,7 +189,7 @@
             disabled={isSubmitting || templateLoading}
         ></textarea>
 
-        <!-- Submit for Review Checkbox -->
+        <!-- === Submit for Review Option === -->
         <div class="review-toggle">
              <label>
                  <input
@@ -174,15 +207,17 @@
             </p>
         {/if}
 
+        <!-- === Status Message === -->
         {#if submitStatus}
             <p class="status-message {submitStatus.success ? 'success' : 'error'}">
                 {submitStatus.message}
             </p>
         {/if}
 
+        <!-- === Submit Button === -->
         <button
             class="submit-button"
-            on:click={handleSubmit}
+            onclick={handleSubmit}
             disabled={!constitutionTitle.trim() || !constitutionText.trim() || isSubmitting || templateLoading}
         >
             {#if isSubmitting}

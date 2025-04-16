@@ -1,32 +1,24 @@
 <script lang="ts">
-	import { fade, fly, scale } from 'svelte/transition';
-	import { elasticOut } from 'svelte/easing';
-	import { marked } from 'marked';
 	import DOMPurify from 'dompurify';
-	import ToolIcon from '~icons/fluent/wrench-24-regular'; // Use Fluent wrench icon
+	import { marked } from 'marked';
+	import { elasticOut } from 'svelte/easing';
+	import { fade, fly, scale } from 'svelte/transition';
+	import ToolIcon from '~icons/fluent/wrench-24-regular';
 
-	export let message: MessageType;
+	interface Props {
+		message: MessageType;
+	}
 
-	// Removed sender variable, use message.type directly
-	// Use message.nodeId directly where needed
+	let { message }: Props = $props();
 
-	// Correctly determine if the message represents an error
-	$: isError = message.type === 'tool' && message.is_error === true;
-	// Note: SystemApiMessage doesn't have an is_error flag in global.d.ts
+	let isError = $derived(message.type === 'tool' && message.is_error === true);
+	let toolName = $derived(message.type === 'tool' ? message.name : null);
+	let aiMessage = $derived(message.type === 'ai' ? message : null);
 
-	// Get tool name safely
-	$: toolName = message.type === 'tool' ? message.name : null;
-
-	// Get AI message safely
-	$: aiMessage = message.type === 'ai' ? message : null;
-
-	// Get Tool message safely (used for tool_call_id if needed, though not currently used)
-	// $: toolApiMsg = message.type === 'tool' ? message : null;
 
 	const titleMap: Record<string, string | undefined> = {
 		human: 'You',
 		system: 'System',
-		// AI and Tool titles are handled dynamically based on nodeId or tool name
 	};
 
 	// Map node IDs and message types to accent colors
@@ -44,12 +36,12 @@
 	};
 
 	// Determine accent color based on error status, node ID, or message type
-	$: cardAccentColor = isError
+	let cardAccentColor = $derived(isError
 		? 'var(--error)'
-		: accentColorMap[message.nodeId] ?? accentColorMap[message.type] ?? 'var(--node-default)';
+		: accentColorMap[message.nodeId] ?? accentColorMap[message.type] ?? 'var(--node-default)');
 
 	// Determine the title displayed on the card
-	$: title = (() => {
+	let title = $derived((() => {
 		if (message.type === 'ai') {
 			// Use Node ID for AI messages if available, otherwise 'AI'
 			return message.nodeId?.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) ?? 'AI';
@@ -61,10 +53,10 @@
 			return titleMap[message.type];
 		}
 		return undefined; // Default case
-	})();
+	})());
 
 	// Generate CSS classes based on message type, node ID, and error status
-	$: cardClasses = `message-card ${message.type} ${message.nodeId ? `node-${message.nodeId.toLowerCase().replace(/[^a-z0-9]/g, '-')}` : ''} ${isError ? 'error' : ''}`;
+	let cardClasses = $derived(`message-card ${message.type} ${message.nodeId ? `node-${message.nodeId.toLowerCase().replace(/[^a-z0-9]/g, '-')}` : ''} ${isError ? 'error' : ''}`);
 
 
 	function getRawContentText(content: MessageType['content']): string {
@@ -76,11 +68,8 @@
 		return String(content ?? '');
 	}
 
-    // Reverted renderedContent logic to original state (pre-Fix #1)
-	$: renderedContent = (() => {
+	let renderedContent = $derived((() => {
 		const rawText = getRawContentText(message.content);
-		// Simplified logic: directly use rawText for parsing for all types,
-		// as the stream processor now sends the correct raw content.
 		if (message.type === 'tool') {
 			// Use rawText directly. The faulty regex parsing is removed.
 			const displayContent = rawText || (isError ? 'Error occurred' : '(No result)');
@@ -104,7 +93,7 @@
 				return `<pre class="error-content">${rawText.replace(/</g, '<').replace(/>/g, '>')}</pre>`;
 			}
 		}
-	})();
+	})());
 
 
 	function formatToolArgs(args: any): string {
@@ -124,18 +113,19 @@
 	}
 
 	// Animation properties based on message type
-	$: animProps = (() => {
+	let animProps = $derived((() => {
 		const common = { duration: 300, easing: elasticOut };
-		const position = message.type === 'human' ? { y: -20, x: 20 } : { y: 20, x: -20 };
+		const position = message.type === 'human' ? { y: -100, x: 20 } : { y: 100, x: -20 };
 		return { ...common, ...position };
-	})();
+	})());
 
 </script>
 
-<div class="message-card-wrapper" in:fly|local={animProps}>
+<div class="message-card-wrapper" in:fade={{duration: 200}}>
 	<div class={cardClasses} style="--card-accent-color: {cardAccentColor}">
 		{#if title}
 			<div class="message-title" style:color={cardAccentColor}>
+		<!-- === Message Title (Type/Node/Tool Name) === -->
 				{#if message.type === 'tool'}
 					<span class="tool-icon"><ToolIcon /></span>
 				{/if}
@@ -147,10 +137,12 @@
 
 		<div class="message-content main-content">
 			{@html renderedContent}
+		<!-- === Main Message Content (Rendered Markdown) === -->
 		</div>
 
 		{#if message.type === 'ai' && aiMessage?.tool_calls && aiMessage.tool_calls.length > 0}
 			<div class="tool-calls-separator"></div>
+		<!-- === AI Tool Calls (If any) === -->
 			<div class="tool-calls-section">
 				{#each aiMessage.tool_calls as toolCall, i (toolCall.id || toolCall.name)}
 					<div class="tool-call-item" in:fade|local={{delay: 100 + i * 50, duration: 200}}>
@@ -351,21 +343,6 @@
 		padding: 0;
 		background: none;
 	}
-
-	/* Style for the <pre> tag generated for tool results content - REMOVED as <pre> is no longer used */
-	/*
-	.tool-result-content {
-		white-space: pre-wrap;
-		word-break: break-word;
-		overflow-wrap: break-word;
-		font-family: inherit;
-		font-size: inherit;
-		margin: 0;
-		padding: 0;
-		background: none;
-		color: inherit;
-	}
-	*/
 
 	/* Style for the <pre> tag generated for error content */
 	.error-content {

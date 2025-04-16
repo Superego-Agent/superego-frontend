@@ -1,52 +1,52 @@
 <script lang="ts">
-  import { localConstitutionsStore } from "../localConstitutions";
   import {
-    globalConstitutions,
-    isLoadingGlobalConstitutions,
-    globalConstitutionsError,
-  } from "../stores/globalConstitutionsStore";
-  import { uiSessions, activeSessionId, activeConfigEditorId } from '../stores'; 
-  import IconInfo from "~icons/fluent/info-24-regular";
+    fetchConstitutionContent,
+  } from "$lib/api/rest.svelte";
+  import { activeStore } from "$lib/state/active.svelte";
+  import { constitutionStore } from "$lib/state/constitutions.svelte"; // Use the unified store
+  import { sessionStore } from "$lib/state/session.svelte";
+
+  import IconAdd from "~icons/fluent/add-24-regular";
   import IconChevronDown from "~icons/fluent/chevron-down-24-regular";
   import IconChevronUp from "~icons/fluent/chevron-up-24-regular";
-  import IconAdd from "~icons/fluent/add-24-regular";
-  import ConstitutionInfoModal from "./ConstitutionInfoModal.svelte";
+  import IconInfo from "~icons/fluent/info-24-regular";
+  
   import AddConstitutionModal from "./AddConstitutionModal.svelte";
-  import RunConfigManager from './RunConfigManager.svelte';
-  import { fetchConstitutionContent } from "../api";
+  import ConstitutionInfoModal from "./ConstitutionInfoModal.svelte";
+  import RunConfigManager from "./RunConfigManager.svelte";
+  import ConstitutionNode from './ConstitutionNode.svelte'; // <-- Added import
 
+  let isExpanded = $state(true);
+  let showInfoModal = $state(false);
+  let modalIsLoading = $state(false);
+  let modalError: string | null = $state(null);
+  let modalTitle: string = $state("");
+  let modalDescription: string | undefined = $state(undefined);
+  let modalContent: string | undefined = $state(undefined);
+  let showAddModal = $state(false);
+  let expandedFolderPaths = $state(new Set<string>(['local'])); // State for expanded folders, 'local' expanded by default
 
-  let isExpanded = true; // Start expanded
-  // Removed internal selectedLevels state and sync block
+  // --- Derived State for Selected Paths ---
 
-  let showModal = false;
-  let modalIsLoading = false;
-  let modalError: string | null = null;
-  let modalTitle: string = "";
-  let modalDescription: string | undefined = undefined;
-  let modalContent: string | undefined = undefined;
-  let showAddModal = false;
-
-  async function showInfo(item: ConstitutionItem | LocalConstitution) {
+  async function showInfo(item: LocalConstitutionMetadata | RemoteConstitutionMetadata) {
     modalTitle = item.title;
-    // Determine if it's global (has description) or local (has text)
-    const isGlobal = "description" in item;
-    
-    modalDescription = isGlobal
-      ? item.description
-      : `Local constitution created ${new Date((item as LocalConstitution).createdAt).toLocaleDateString()}`;
+    const isRemote = item.source === 'remote';
+
+    modalDescription = isRemote
+      ? item.description ?? `Remote constitution (${item.relativePath})`
+      : `Local constitution`;
     modalContent = undefined;
     modalError = null;
     modalIsLoading = true;
-    showModal = true;
+    showInfoModal = true;
 
-    if (!isGlobal) {
-      modalContent = (item as LocalConstitution).text;
+    if (!isRemote) {
+      modalContent = item.text; 
       modalIsLoading = false;
     } else {
-      // For global, fetch content
+      // For remote, fetch content using relativePath
       try {
-        modalContent = await fetchConstitutionContent(item.id);
+        modalContent = await fetchConstitutionContent(item.relativePath);
       } catch (err: any) {
         console.error("Failed to fetch constitution content:", err);
         modalError = err.message || "Unknown error fetching content.";
@@ -60,100 +60,134 @@
     isExpanded = !isExpanded;
   }
 
-  // --- Helper Functions for Direct Store Interaction ---
-
-  function getActiveConfig(): ThreadConfigState | null {
-      const currentSessionId = $activeSessionId;
-      if (!currentSessionId) return null;
-      const currentSession = $uiSessions[currentSessionId];
-      const activeId = $activeConfigEditorId; 
-      if (!activeId || !currentSession?.threads) return null;
-      return currentSession.threads[activeId] ?? null;
+  // Handles toggling expansion state for folders in the tree
+  function handleToggleExpand(node: UIFolderNode) {
+    const newSet = new Set(expandedFolderPaths);
+    if (newSet.has(node.uiPath)) {
+      newSet.delete(node.uiPath);
+    } else {
+      newSet.add(node.uiPath);
+    }
+    expandedFolderPaths = newSet;
   }
 
-  function getModule(itemId: string): ConfiguredConstitutionModule | null {
-      const activeConfig = getActiveConfig();
-      return activeConfig?.runConfig?.configuredModules?.find(m => m.id === itemId) ?? null;
-  }
+  // --- Reactive Derived State ---
+  let activeSessionId = $derived(sessionStore.activeSessionId);
+  let activeThreadConfigId = $derived(activeStore.activeConfigEditorId);
+  let currentSession = $derived(activeSessionId ? sessionStore.uiSessions[activeSessionId] : null);
+  let threadToUpdate = $derived(currentSession && activeThreadConfigId ? currentSession.threads[activeThreadConfigId] : null);
+  let currentModules = $derived(threadToUpdate?.runConfig?.configuredModules ?? []);
 
-  // Generic helper to update the configuredModules array in the store
-  function updateModules(modulesUpdater: (currentModules: ConfiguredConstitutionModule[]) => ConfiguredConstitutionModule[]) {
-      const currentSessionId = $activeSessionId;
-      if (!currentSessionId) {
-          console.warn("RunConfigurationPanel: No active session ID found, cannot update modules.");
-          return;
+  // --- Event Handlers ---
+
+  function handleToggleSelect(uiPath: string, isSelected: boolean, metadata: LocalConstitutionMetadata | RemoteConstitutionMetadata) {
+    // Use derived state variables directly
+    if (!activeSessionId || !activeThreadConfigId || !currentSession || !threadToUpdate) {
+      console.warn("RunConfigurationPanel: Cannot handle toggle select - missing active session/thread context.");
+      return;
+    }
+
+    if (!threadToUpdate.runConfig) {
+        threadToUpdate.runConfig = { configuredModules: [] };
+    }
+
+    if (isSelected) {
+      // Add if not present, identified by title
+      const alreadyExists = currentModules.some((m) => m.title === metadata.title);
+
+      if (!alreadyExists) {
+        // Construct the correct module type based on source
+        const newModule: ConfiguredConstitutionModule =
+          metadata.source === 'remote'
+            ? { relativePath: metadata.relativePath, title: metadata.title, adherence_level: 3 }
+            : { text: metadata.text, title: metadata.title, adherence_level: 3 };
+        threadToUpdate.runConfig.configuredModules.push(newModule);
+        currentSession.lastUpdatedAt = new Date().toISOString(); 
       }
-      const currentSession = $uiSessions[currentSessionId];
-      const activeThreadConfigId = $activeConfigEditorId;
-      if (!activeThreadConfigId) {
-          console.warn("RunConfigurationPanel: No active thread config ID found, cannot update modules.");
-          return;
+    } else {
+      // Remove based on title using filter (creates new array, assign back)
+      const initialLength = currentModules.length;
+      threadToUpdate.runConfig.configuredModules = currentModules.filter((m) => m.title !== metadata.title);
+      if (threadToUpdate.runConfig.configuredModules.length !== initialLength) {
+          currentSession.lastUpdatedAt = new Date().toISOString(); // Update timestamp only if removed
       }
-
-      uiSessions.update(sessions => {
-          const session = sessions[currentSessionId];
-          // Ensure the path exists before trying to update
-          if (session?.threads?.[activeThreadConfigId]) {
-              // Ensure runConfig exists
-              if (!session.threads[activeThreadConfigId].runConfig) {
-                  session.threads[activeThreadConfigId].runConfig = { configuredModules: [] };
-              }
-              const currentModules = session.threads[activeThreadConfigId].runConfig.configuredModules ?? [];
-              const newModules = modulesUpdater(currentModules);
-              // Only update if the array content actually changed (simple JSON check)
-              if (JSON.stringify(currentModules) !== JSON.stringify(newModules)) {
-                  session.threads[activeThreadConfigId].runConfig.configuredModules = newModules;
-                  session.lastUpdatedAt = new Date().toISOString();
-                  console.log(`RunConfigurationPanel: Updated modules for session ${currentSessionId}, thread ${activeThreadConfigId}`);
-              }
-          } else {
-               console.warn(`RunConfigurationPanel: Could not find session ${currentSessionId} or thread ${activeThreadConfigId} in store to update modules.`);
-          }
-          return sessions;
-      });
+    }
   }
 
-  // Specific handler for checkbox changes
-  function handleCheckboxChange(itemId: string, isChecked: boolean) {
-      updateModules(currentModules => {
-          if (isChecked) {
-              // Add if not present
-              if (!currentModules.some(m => m.id === itemId)) {
-                   const globalItem = $globalConstitutions.find(c => c.id === itemId);
-                   const localItem = $localConstitutionsStore.find(c => c.id === itemId);
-                   const title = globalItem?.title ?? localItem?.title ?? 'Unknown Constitution'; // Provide a default title
-                   return [...currentModules, { id: itemId, title: title, adherence_level: 3 }]; // Add with default level 3
-              }
-              return currentModules; // Already present, do nothing (level handled by slider)
-          } else {
-              // Remove if present
-              return currentModules.filter(m => m.id !== itemId);
-          }
-      });
+  function findMetadataInTree(uiPath: string, nodes: UINode[]): LocalConstitutionMetadata | RemoteConstitutionMetadata | null {
+    for (const node of nodes) {
+      if (node.type === 'file' && node.uiPath === uiPath) {
+        return node.metadata;
+      } else if (node.type === 'folder') {
+        const found = findMetadataInTree(uiPath, node.children);
+        if (found) {
+          return found;
+        }
+      }
+    }
+    return null;
   }
 
-  // Specific handler for slider input changes
-  function handleSliderInput(itemId: string, newLevel: number) {
-       updateModules(currentModules =>
-           currentModules.map(m =>
-               m.id === itemId ? { ...m, adherence_level: newLevel } : m
-           )
-       );
+  function handleSliderInput(uiPath: string, newLevel: number) {
+    const metadata = findMetadataInTree(uiPath, constitutionStore.displayTree);
+    if (!metadata) {
+      console.error(`[RunConfigurationPanel] Could not find metadata for uiPath ${uiPath} in handleSliderInput`);
+      return;
+    }
+
+    if (!activeSessionId || !activeThreadConfigId || !currentSession || !threadToUpdate) {
+       console.warn(`RunConfigurationPanel: Could not find session/thread context for slider input.`);
+       return;
+    }
+    if (!threadToUpdate.runConfig?.configuredModules) {
+        console.warn(`[RunConfigurationPanel] runConfig or configuredModules missing for slider input on thread ${activeThreadConfigId}.`);
+        return;
+    }
+
+    const moduleIndex = currentModules.findIndex((m) => m.title === metadata.title);
+
+    if (moduleIndex !== -1) {
+        currentModules[moduleIndex].adherence_level = newLevel;
+        currentSession.lastUpdatedAt = new Date().toISOString();
+    } else {
+        console.warn(`[RunConfigurationPanel] Could not find module with title "${metadata.title}" to update level.`);
+    }
   }
+
+  // Effect to ensure a default config is selected if the active one becomes invalid
+  $effect(() => {
+    const activeSessionId = sessionStore.activeSessionId;
+    const activeSession = activeSessionId ? sessionStore.uiSessions[activeSessionId] : null;
+    const currentEditorId = activeStore.activeConfigEditorId;
+    const sessionThreads = activeSession?.threads;
+
+    if (sessionThreads) {
+      const threadIds = Object.keys(sessionThreads);
+      if (threadIds.length > 0) {
+        const isValidEditorId = currentEditorId !== null && sessionThreads[currentEditorId] !== undefined;
+        if (!isValidEditorId) {
+          activeStore.setActiveConfigEditor(threadIds[0]);
+          console.log(`[RunConfigPanel] Defaulting activeConfigEditorId to first thread: ${threadIds[0]}`);
+        }
+      } else {
+        if (currentEditorId !== null) activeStore.setActiveConfigEditor(null);
+      }
+    } else {
+      if (currentEditorId !== null) activeStore.setActiveConfigEditor(null);
+    }
+  });
 </script>
-
-  <RunConfigManager />
 
 <div class="selector-card">
   <!-- Header with integrated toggle -->
   <div
     class="selector-header"
-    on:click={toggleExpand}
+    onclick={toggleExpand}
     role="button"
     tabindex="0"
-    on:keydown={(e) => e.key === "Enter" && toggleExpand()}
+    onkeydown={(e) => e.key === "Enter" && toggleExpand()}
   >
-    <span class="header-title">Constitutions</span>
+    <span class="header-title">Flow Configurations</span>
     {#if isExpanded}
       <IconChevronDown class="toggle-icon" />
     {:else}
@@ -163,127 +197,73 @@
 
   <!-- Collapsible content area -->
   {#if isExpanded}
+    <RunConfigManager />
+
     <div class="options-container">
-      {#if $isLoadingGlobalConstitutions}
-        <p class="loading-text">Loading global constitutions...</p>
-      {:else if $globalConstitutionsError}
-        <p class="loading-text error-text">
-          Error loading: {$globalConstitutionsError}
-        </p>
+      <!-- Use constitutionStore for loading/error state -->
+      {#if constitutionStore.isLoadingGlobal}
+        <p class="loading-text">Loading constitutions...</p>
+      {:else if constitutionStore.globalError}
+        <p class="loading-text error-text">Error: {constitutionStore.globalError}</p>
       {:else}
         <div class="options-wrapper">
-          <div
+          <!-- === Add New Constitution Item === -->
+           <div
             class="option-item add-item"
-            on:click={() => (showAddModal = true)}
+            onclick={() => (showAddModal = true)}
             role="button"
             tabindex="0"
-            on:keydown={(e) => {
+            onkeydown={(e) => {
               if (e.key === "Enter" || e.key === " ") showAddModal = true;
             }}
           >
             <div class="option-label add-label">
               <IconAdd class="add-icon" />
-              <span class="title-text">Add Constitution</span>
+              <span class="title-text">Add a Constitution</span>
             </div>
           </div>
 
-          {#each $localConstitutionsStore as item (item.id)}
-            <!-- Removed @const isSelected -->
-            <div class="option-item">
-              <label class="option-label">
-                <input
-                  type="checkbox"
-                  checked={!!getModule(item.id)}
-                  on:change={(e) => handleCheckboxChange(item.id, e.currentTarget.checked)}
-                 />
-                <span class="title-text"
-                  ><span class="local-indicator">[Local]</span
-                  >{item.title}</span
-                >
-                <button
-                  class="info-button"
-                  title="Show constitution info"
-                  on:click|stopPropagation={() => showInfo(item)}
-                  ><IconInfo /></button
-                >
-              </label>
-              {#if getModule(item.id)}
-                <div class="slider-container">
-                  <input
-                    type="range"
-                    min="1"
-                    max="5"
-                    step="1"
-                    value={getModule(item.id)?.adherence_level ?? 0}
-                    on:input={(e) => handleSliderInput(item.id, e.currentTarget.valueAsNumber)}
-                    class="adherence-slider"
-                    aria-label="{item.title} Adherence Level"
-                   />
-                  <span class="level-display">{getModule(item.id)?.adherence_level ?? '-'}/5</span>
-                </div>
-              {/if}
-            </div>
+          <!-- === Hierarchical Constitution Tree === -->
+          {#each constitutionStore.displayTree as node (node.uiPath)}
+            {@const isSelected = node.type === 'file' && currentModules.some(m => m.title === node.metadata.title)}
+            <ConstitutionNode
+              node={node}
+              level={0}
+              isSelected={isSelected}
+              activeConfigModules={currentModules} 
+              {expandedFolderPaths}
+              getModule={(uiPath: string) => currentModules.find(m => {
+                  const meta = findMetadataInTree(uiPath, constitutionStore.displayTree);
+                  return meta ? m.title === meta.title : false;
+              }) ?? null}
+              onToggleSelect={handleToggleSelect}
+              onShowDetail={showInfo}
+              onSliderInput={handleSliderInput}
+              onToggleExpand={handleToggleExpand}
+            />
           {/each}
-
-          {#each $globalConstitutions as item (item.id)}
-            <!-- Removed @const isSelected -->
-            <div class="option-item">
-              <label class="option-label">
-                <input
-                  type="checkbox"
-                  checked={!!getModule(item.id)}
-                  on:change={(e) => handleCheckboxChange(item.id, e.currentTarget.checked)}
-                 />
-                <span class="title-text" title={item.description}
-                  >{item.title}</span
-                >
-                <button
-                  class="info-button"
-                  title="Show constitution info"
-                  on:click|stopPropagation={() => showInfo(item)}
-                  ><IconInfo /></button
-                >
-              </label>
-              {#if getModule(item.id)}
-                <div class="slider-container">
-                  <input
-                    type="range"
-                    min="1"
-                    max="5"
-                    step="1"
-                    value={getModule(item.id)?.adherence_level ?? 0}
-                    on:input={(e) => handleSliderInput(item.id, e.currentTarget.valueAsNumber)}
-                    class="adherence-slider"
-                    aria-label="{item.title} Adherence Level"
-                   />
-                  <span class="level-display">{getModule(item.id)?.adherence_level ?? '-'}/5</span>
-                </div>
-              {/if}
-            </div>
-          {/each}
-
-          {#if $globalConstitutions.length === 0 && $localConstitutionsStore.length === 0}
-            <p class="loading-text">No constitutions available.</p>
-          {/if}
         </div>
       {/if}
     </div>
   {/if}
 </div>
 
-{#if showModal}
+<!-- === Modals === -->
+{#if showInfoModal}
   <ConstitutionInfoModal
     title={modalTitle}
     description={modalDescription}
     content={modalContent}
     isLoading={modalIsLoading}
     error={modalError}
-    on:close={() => (showModal = false)}
+    onClose={() => (showInfoModal = false)}
   />
 {/if}
 
 {#if showAddModal}
-  <AddConstitutionModal on:close={() => (showAddModal = false)} />
+  <AddConstitutionModal
+    onClose={() => (showAddModal = false)}
+  />
 {/if}
 
 <style lang="scss">
@@ -316,10 +296,6 @@
     color: var(--text-primary);
   }
 
-  .toggle-icon {
-    color: var(--text-secondary);
-    transition: transform 0.2s ease-in-out;
-  }
 
   .options-container {
     padding: var(--space-sm) var(--space-md);
@@ -342,7 +318,7 @@
 
   .option-item {
     display: grid;
-    grid-template-columns: minmax(150px, 3fr) minmax(100px, 1fr);
+    // grid-template-columns: minmax(150px, 3fr) minmax(100px, 1fr); // Removed old grid layout
     gap: var(--space-xs) var(--space-md);
     align-items: center;
     padding: var(--space-xs); /* Add padding for hover effect */
@@ -350,11 +326,11 @@
     transition: background-color 0.15s ease; /* Smooth hover transition */
   }
   .option-item:hover {
-    background-color: rgba(128, 128, 128, 0.1); /* Subtle hover background */
+    // background-color: rgba(128, 128, 128, 0.1); /* Subtle hover background - Handled by Node */
   }
 
   .option-label {
-    grid-column: 1 / 2;
+    // grid-column: 1 / 2; // Removed old grid layout
     display: flex;
     align-items: center;
     gap: var(--space-sm);
@@ -384,8 +360,7 @@
     flex-shrink: 0; // Keep specific flex-shrink
     opacity: 0.6; // Keep specific initial opacity
 
-    &:hover {
-      // Keep specific hover styles (only color/opacity change)
+    &:hover { 
       color: var(--primary);
       opacity: 1;
       background-color: transparent; // Prevent mixin hover background
@@ -403,23 +378,12 @@
     color: var(--primary);
   }
 
-  .add-icon {
-    font-size: 1.2em;
-    font-weight: bold;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 16px;
-    height: 16px;
-    line-height: 1;
-  }
 
   .slider-container {
-    grid-column: 2 / 3;
+    // grid-column: 2 / 3; // Removed old grid layout
     display: flex;
     align-items: center;
     gap: var(--space-sm);
-    /* min-width: 100px; */
   }
 
   .adherence-slider {
@@ -441,12 +405,5 @@
     color: var(--text-secondary);
     padding: var(--space-md);
     text-align: center;
-  }
-
-  .local-indicator {
-    font-weight: 600;
-    color: var(--secondary); /* Or another distinct color */
-    margin-right: var(--space-xs);
-    font-size: 0.9em;
   }
 </style>

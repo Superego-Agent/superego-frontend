@@ -1,46 +1,48 @@
-<script lang="ts">
+  <script lang="ts">
+  // Removed incorrect $effect import - runes are compiler features
+  import { sessionStore } from '$lib/state/session.svelte';
+  import { threadStore } from '$lib/state/threads.svelte';
 import { onMount } from 'svelte';
-import { loadGlobalConstitutions } from './lib/stores/globalConstitutionsStore';
+import { constitutionStore } from '$lib/state/constitutions.svelte'; // Use updated single store instance
 import Sidebar from './lib/components/Sidebar.svelte';
-import ChatInterface from './lib/components/ChatInterface.svelte';
+import ChatInterface from '$lib/components/ChatInterface.svelte';
 import ThemeToggle from './lib/components/ThemeToggle.svelte';
-import { theme } from './lib/stores/theme';
-import { loadLocalConstitutions } from './lib/localConstitutions'; 
 import './lib/styles/theme.css';
 import './lib/styles/dark-theme.css';
 
-import { get } from 'svelte/store';
-import { uiSessions, activeSessionId } from './lib/stores';
-import { createNewSession } from './lib/sessionManager';
+// Removed duplicate sessionStore import
 onMount( async () => {
     try {
         await Promise.all([
-            loadGlobalConstitutions(), 
-            loadLocalConstitutions() 
-        ]);
-        console.log('Fetched initial global constitutions and loaded local ones.');
+            // constitutionStore.load(), // Removed - store loads itself via $effect.pre
+
+        ]); // End of Promise.all
+  // $effect block moved outside onMount below
     } catch (error) {
         console.error("App onMount Error: Failed to initialize constitutions:", error);
     }
 
         // --- START: Add Session Initialization Logic ---
-        const currentActiveId = get(activeSessionId);
+        const currentActiveId = sessionStore.activeSessionId; 
         if (currentActiveId === null) {
-            const currentSessions = get(uiSessions);
+            const currentSessions = sessionStore.uiSessions;
             const sessionIds = Object.keys(currentSessions);
             if (sessionIds.length > 0) {
                 // Activate the first existing session found
-                activeSessionId.set(sessionIds[0]);
+                sessionStore.setActiveSessionId(sessionIds[0]); 
                 console.log(`[App.svelte] Activated existing session: ${sessionIds[0]}`);
             } else {
                 // No sessions exist, create a new one
                 console.log('[App.svelte] No existing sessions found, creating a new one.');
-                createNewSession(); // This function already sets it as active
+                sessionStore.createNewSession(); // This function already sets it as active
             }
         }
         // --- END: Add Session Initialization Logic ---
 
-});
+}); // End of onMount
+
+  // --- Effect to load history for active session threads ---
+  // This runs reactively whenever activeSession or threadCacheStore changes
 
 </script>
 
