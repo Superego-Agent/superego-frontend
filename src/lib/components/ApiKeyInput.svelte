@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { apiKeyStore, setApiKey } from "../state/apiKey.svelte";
-  import { sendApiKeyToBackend } from "../services/apiKey.svelte";
+  // import { apiKeyStore, setApiKey } from "../state/apiKey.svelte"; // No longer using global single key store
+  import { sendApiKeyToBackend } from "../services/apiKey.svelte"; // Will modify this service later
   import { activeStore } from "$lib/state/active.svelte";
+  import { modelStore } from '$lib/state/modelStore.svelte'; // Import model store
   import IconEye from "~icons/fluent/eye-24-regular";
   import IconEyeOff from "~icons/fluent/eye-off-24-regular";
   import IconInfo from "~icons/fluent/info-24-regular";
@@ -10,65 +11,98 @@
   import IconError from "~icons/fluent/error-circle-24-regular";
 
   // Component state
-  let apiKey = $state("");
-  let showApiKey = $state(false);
-  let isTooltipVisible = $state(false);
-  let isSending = $state(false);
+  let providerApiKeys = $state<Record<string, string>>({}); // Key: providerName, Value: apiKey
+  let showProviderApiKey = $state<Record<string, boolean>>({}); // Key: providerName, Value: show/hide state
+  let isTooltipVisible = $state(false); // Keep tooltip state
+  let isSending = $state(false); // Overall sending state for "Save All"
   let sendStatus = $state<"idle" | "success" | "error">("idle");
   let statusMessage = $state("");
 
-  // Subscribe to the store to update the component when the store changes
+  // Initialize state based on providers
   $effect(() => {
-    const unsubscribe = apiKeyStore.subscribe((value) => {
-      apiKey = value;
-    });
-
-    return unsubscribe;
+      const initialKeys: Record<string, string> = {};
+      const initialVisibility: Record<string, boolean> = {};
+      for (const provider of modelStore.providerNames) {
+          initialKeys[provider] = ''; // Start with empty keys
+          initialVisibility[provider] = false; // Start hidden
+      }
+      providerApiKeys = initialKeys;
+      showProviderApiKey = initialVisibility;
+      // console.log('Initialized API Key state for providers:', modelStore.providerNames); // Debug log
   });
-
-  // Update the store when the input changes
-  function handleInputChange() {
-    setApiKey(apiKey); // Use setApiKey to update both stores
-    // Reset status when the key changes
+  
+  // Update the specific provider's key state
+  function handleInputChange(providerName: ProviderType, value: string) {
+    providerApiKeys = { ...providerApiKeys, [providerName]: value };
+    // Reset global status when any key changes
     sendStatus = "idle";
     statusMessage = "";
   }
 
-  // Send the API key to the backend
-  async function sendApiKey() {
-    if (!apiKey) {
-      activeStore.setGlobalError("Please enter an API key");
-      return;
-    }
-
+  // Send all non-empty API keys to the backend
+  async function saveAllKeys() {
+    // Include ALL providers, sending empty strings for cleared keys
+    const keysToSend: { provider: ProviderType; key: string }[] = modelStore.providerNames.map(provider => ({
+        provider: provider as ProviderType,
+        key: providerApiKeys[provider] ?? '' // Send empty string if null/undefined
+    }));
+  
+    // No need to check keysToSend.length === 0, always send all providers
+    // if (keysToSend.length === 0) {
+    //   activeStore.setGlobalError("Please enter at least one API key to save.");
+    //   return;
+    // }
+  
     isSending = true;
     sendStatus = "idle";
     statusMessage = "";
 
-    try {
-      const result = await sendApiKeyToBackend();
-      sendStatus = "success";
-      statusMessage = result.message || "API key sent successfully";
-    } catch (error) {
-      sendStatus = "error";
-      statusMessage =
-        error instanceof Error ? error.message : "Failed to send API key";
-    } finally {
-      isSending = false;
+    let successCount = 0;
+    let errorCount = 0;
+    let firstErrorMessage = "";
+  
+    // Send keys sequentially or in parallel? Sequential is simpler for status.
+    for (const item of keysToSend) {
+        try {
+            // TODO: Update sendApiKeyToBackend to accept provider and key
+            const result = await sendApiKeyToBackend(item.provider, item.key);
+            successCount++;
+        } catch (error) {
+            errorCount++;
+            if (!firstErrorMessage) {
+                firstErrorMessage = error instanceof Error ? error.message : `Failed to save key for ${item.provider}`;
+            }
+            console.error(`Failed to send API key for ${item.provider}:`, error);
+        }
+    }
+  
+    isSending = false;
+  
+    if (errorCount === 0 && successCount > 0) {
+        sendStatus = "success";
+        statusMessage = `${successCount} API key(s) saved successfully.`;
+    } else if (errorCount > 0) {
+        sendStatus = "error";
+        statusMessage = `Error saving keys. ${firstErrorMessage} (${errorCount} failed, ${successCount} succeeded).`;
+    } else {
+        // Should not happen if keysToSend was not empty, but handle defensively
+        sendStatus = "idle";
+        statusMessage = "";
     }
   }
-
-  // Toggle visibility of the API key
-  function toggleVisibility() {
-    showApiKey = !showApiKey;
+  
+  // Toggle visibility of a specific provider's API key
+  function toggleVisibility(providerName: ProviderType) {
+    showProviderApiKey = { ...showProviderApiKey, [providerName]: !showProviderApiKey[providerName] };
   }
-
-  // Clear the API key
-  function clearApiKey() {
-    apiKey = "";
-    setApiKey(""); // Use setApiKey to clear both stores
-    sendStatus = "idle";
-    statusMessage = "";
+  
+  // Clear a specific provider's API key
+  function clearApiKey(providerName: ProviderType) {
+    providerApiKeys = { ...providerApiKeys, [providerName]: '' };
+    // Reset status if the cleared key was the only one potentially causing an error message?
+    // Or just let the user re-save. Simpler for now.
+    // sendStatus = "idle";
+    // statusMessage = "";
   }
 
   // Show/hide tooltip
@@ -83,7 +117,7 @@
 
 <div class="api-key-container">
   <div class="api-key-header">
-    <label for="api-key-input">Enter your Anthropic API Key here</label>
+    <label>API Key Management</label> <!-- Changed header -->
     <div
       class="info-icon"
       onmouseenter={showTooltip}
@@ -97,69 +131,65 @@
       {#if isTooltipVisible}
         <div class="tooltip">
           This API key is stored in memory only and will be cleared when you
-          refresh or close the page.
+          refresh or close the page. <!-- TODO: Update tooltip if backend stores keys -->
+            </div>
+          {/if}
         </div>
-      {/if}
-    </div>
-  </div>
-
-  {#if activeStore.globalError && activeStore.globalError.includes("API key")}
-    <div class="api-key-required-message">
-      <IconError />
-      <span>{activeStore.globalError}</span>
-    </div>
-  {/if}
-
-  <div class="input-group">
-    <input
-      id="api-key-input"
-      type={showApiKey ? "text" : "password"}
-      placeholder="Enter API key"
-      bind:value={apiKey}
-      oninput={handleInputChange}
-      class="api-key-input"
-    />
-
-    <button
-      type="button"
-      class="icon-button visibility-toggle"
-      onclick={toggleVisibility}
-      title={showApiKey ? "Hide API key" : "Show API key"}
-    >
-      {#if showApiKey}
-        <IconEyeOff />
+      </div>
+      
+      <!-- Loop through providers -->
+      {#if modelStore.isLoading}
+          <p>Loading providers...</p>
+      {:else if modelStore.error}
+          <p class="status-message error">Error loading providers: {modelStore.error}</p>
       {:else}
-        <IconEye />
+          {#each modelStore.providerNames as providerName (providerName)}
+              {@const typedProviderName = providerName as ProviderType}
+              <div class="provider-key-group">
+                  <label for={`api-key-input-${providerName}`}>{providerName} API Key:</label>
+                  <div class="input-group">
+                      <input
+                          id={`api-key-input-${providerName}`}
+                          type={showProviderApiKey[providerName] ? "text" : "password"}
+                          placeholder={`Enter ${providerName} API key`}
+                          bind:value={providerApiKeys[providerName]}
+                          oninput={(e) => handleInputChange(typedProviderName, e.currentTarget.value)}
+                          class="api-key-input"
+                      />
+                      <button
+                          type="button"
+                          class="icon-button visibility-toggle"
+                          onclick={() => toggleVisibility(typedProviderName)}
+                          title={showProviderApiKey[providerName] ? `Hide ${providerName} key` : `Show ${providerName} key`}
+                      >
+                          {#if showProviderApiKey[providerName]} <IconEyeOff /> {:else} <IconEye /> {/if}
+                      </button>
+                      {#if providerApiKeys[providerName]}
+                          <button
+                              type="button"
+                              class="icon-button clear-button"
+                              onclick={() => clearApiKey(typedProviderName)}
+                              title={`Clear ${providerName} key`}
+                          >
+                              <IconDelete />
+                          </button>
+                      {/if}
+                  </div>
+              </div>
+          {/each}
       {/if}
-    </button>
-
-    {#if apiKey}
-      <button
-        type="button"
-        class="icon-button clear-button"
-        onclick={clearApiKey}
-        title="Clear API key"
-      >
-        <IconDelete />
-      </button>
-    {/if}
-  </div>
-
-  <div class="api-key-actions">
-    <button
-      type="button"
-      class="send-button"
-      onclick={sendApiKey}
-      disabled={!apiKey || isSending}
-    >
-      {#if isSending}
-        Sending...
-      {:else}
-        Set API Key
-      {/if}
-    </button>
-
-    {#if sendStatus === "success"}
+      
+      <div class="api-key-actions">
+        <button
+          type="button"
+          class="send-button"
+          onclick={saveAllKeys}
+          disabled={isSending || modelStore.isLoading || !!modelStore.error}
+        >
+          {#if isSending} Saving... {:else} Save All Keys {/if}
+        </button>
+      
+        {#if sendStatus === "success"}
       <div class="status-message success">
         <IconCheck />
         <span>{statusMessage}</span>
@@ -174,6 +204,8 @@
 </div>
 
 <style lang="scss">
+  @use "../styles/mixins" as *; // Ensure mixins are available if needed
+  
   .api-key-container {
     margin-bottom: var(--space-md);
     padding: var(--space-sm);
@@ -184,10 +216,10 @@
   .api-key-header {
     display: flex;
     align-items: center;
-    margin-bottom: var(--space-xs);
-
+    margin-bottom: var(--space-sm); // Increased bottom margin for header
+  
     label {
-      font-size: 0.9em;
+      font-size: 0.9em; // Keep label size consistent
       font-weight: 500;
       color: var(--text-secondary);
       margin-right: var(--space-xs);
@@ -225,9 +257,21 @@
   .input-group {
     display: flex;
     align-items: center;
-    position: relative;
+    position: relative; // Keep for icon positioning
+    margin-bottom: var(--space-xs); // Add space below each input group
   }
-
+  
+  .provider-key-group {
+      margin-bottom: var(--space-md); // Space between provider sections
+      label {
+          display: block; // Make label block for spacing
+          font-size: 0.85em;
+          font-weight: 500;
+          color: var(--text-secondary);
+          margin-bottom: var(--space-xs);
+      }
+  }
+  
   .api-key-input {
     flex: 1;
     padding: var(--space-sm);

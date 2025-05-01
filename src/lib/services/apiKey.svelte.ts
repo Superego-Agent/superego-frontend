@@ -1,32 +1,44 @@
 import { logExecution } from '../utils/utils';
 import { activeStore } from '$lib/state/active.svelte';
 import { getEncryptedApiKey } from '$lib/state/apiKey.svelte';
+import { encryptApiKey } from '$lib/utils/crypto'; // <-- Added import
 import { getOrCreateSessionId } from '$lib/utils/crypto';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api';
 
 /**
- * Sends the encrypted API key to the backend server
- * @returns A promise that resolves to a success message or rejects with an error
+ * Sends an API key for a specific provider to the backend server.
+ * Handles encryption internally.
+ * @param provider The provider the key belongs to.
+ * @param apiKey The raw API key (will be encrypted).
+ * @returns A promise that resolves to the backend response or rejects with an error.
  */
-export async function sendApiKeyToBackend(): Promise<{ status: string; message: string }> {
-  return logExecution('Send API key to backend', async () => {
+export async function sendApiKeyToBackend(provider: ProviderType, apiKey: string): Promise<{ status: string; message: string }> {
+  // Note: Encryption now happens *inside* this function based on the raw key passed in.
+  // This avoids needing a global store for the *raw* key.
+  return logExecution(`Send API key for ${provider}`, async () => {
     activeStore.clearGlobalError();
     
-    // Get the encrypted API key and session ID
-    const encryptedApiKey = getEncryptedApiKey();
+    // Get session ID and encrypt the provided raw key
     const sessionId = getOrCreateSessionId();
-    console.log('[apiKey.svelte.ts] Sending API key to backend, encrypted key length:', encryptedApiKey ? encryptedApiKey.length : 0);
+    // We need the encryptApiKey function, assuming it exists in crypto.ts
+    // If not, we need to add it or adjust this logic.
+    // Let's assume it exists for now:
+    // import { encryptApiKey } from '$lib/utils/crypto'; // Needs import
+    const encryptedApiKey = await encryptApiKey(apiKey); // Encrypt the raw key
+
+    console.log(`[apiKey.svelte.ts] Sending API key for ${provider}, encrypted key length:`, encryptedApiKey ? encryptedApiKey.length : 0);
     console.log('[apiKey.svelte.ts] Using session ID:', sessionId);
     
     try {
-      // Make sure we're using the correct field names expected by the backend
-      console.log('[apiKey.svelte.ts] Request body fields: encrypted_key, session_id');
-      const requestBody = JSON.stringify({ 
+      // Add the 'provider' field to the request body
+      console.log('[apiKey.svelte.ts] Request body fields: provider, encrypted_key, session_id');
+      const requestBody = JSON.stringify({
+        provider: provider, // Add provider field
         encrypted_key: encryptedApiKey,
         session_id: sessionId
       });
-      console.log('[apiKey.svelte.ts] Request body:', requestBody);
+      console.log(`[apiKey.svelte.ts] Request body for ${provider}:`, requestBody);
       
       const response = await fetch(`${BASE_URL}/key/set`, {
         method: 'POST',

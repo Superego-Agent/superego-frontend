@@ -128,6 +128,19 @@ export const submitConstitution = (
 	);
 };
 
+// --- Model/Provider API Functions ---
+
+/** Expected response structure for providers/models endpoint */
+type ProvidersModelsResponse = Record<string, string[]>;
+
+/**
+ * Fetches the available providers and their corresponding models.
+ */
+export const fetchProvidersModels = (signal?: AbortSignal): Promise<ProvidersModelsResponse> => {
+	return logExecution('Fetch providers and models', () =>
+		apiFetch<ProvidersModelsResponse>(`${BASE_URL}/providers/models`, {}, signal)
+	);
+};
 
 // --- Thread API Functions ---
 

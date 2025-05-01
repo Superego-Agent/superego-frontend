@@ -1,7 +1,6 @@
   <script lang="ts">
-  // Removed incorrect $effect import - runes are compiler features
-  import { sessionStore } from '$lib/state/session.svelte';
-  import { threadStore } from '$lib/state/threads.svelte';
+import { sessionStore } from '$lib/state/session.svelte';
+import { threadStore } from '$lib/state/threads.svelte';
 import { onMount } from 'svelte';
 import { constitutionStore } from '$lib/state/constitutions.svelte'; // Use updated single store instance
 import { sendApiKeyToBackend } from '$lib/services/apiKey.svelte';
@@ -12,12 +11,10 @@ import ThemeToggle from './lib/components/ThemeToggle.svelte';
 import './lib/styles/theme.css';
 import './lib/styles/dark-theme.css';
 
-// Removed duplicate sessionStore import
 onMount( async () => {
     try {
         await Promise.all([
             // constitutionStore.load(), // Removed - store loads itself via $effect.pre
-
         ]); // End of Promise.all
   // $effect block moved outside onMount below
     } catch (error) {
@@ -41,32 +38,29 @@ onMount( async () => {
     }
     // --- END: Add Session Initialization Logic ---
 
-    // Try to send an empty API key to the backend to check status
-    try {
-        console.log('[App.svelte] Checking API key status...');
-        await sendApiKeyToBackend();
-        console.log('[App.svelte] API key is set and ready.');
-    } catch (error) {
-        // This is expected if no API key is set yet
-        console.log('[App.svelte] API key needed: ' + (error instanceof Error ? error.message : String(error)));
-        // We'll show a message in the UI via the activeStore global error
-    }
+    // Removed API key check on mount - handled by ApiKeyInput component now
+    // try {
+    //   console.log('[App.svelte] Checking API key status...');
+    //   await sendApiKeyToBackend(); // OLD CALL - REMOVED
+    //   console.log('[App.svelte] API key is set and ready.');
+    // } catch (error) {
+    //   console.log('[App.svelte] API key needed: ' + (error instanceof Error ? error.message : String(error)));
+    // }
+  
+  }); // End of onMount
 
-}); // End of onMount
-
-// Effect to send API key to backend when it changes
-$effect(() => {
-    const apiKey = $apiKeyStore;
-    if (apiKey) {
-        console.log('[App.svelte] API key changed, sending to backend...');
-        // Make sure the encrypted key is updated
-        setApiKey(apiKey);
-        sendApiKeyToBackend().catch(error => {
-            console.error('[App.svelte] Error sending API key to backend:', error);
-        });
-    }
-});
-
+// Removed effect to auto-send API key - handled by ApiKeyInput component now
+// $effect(() => {
+//     const apiKey = $apiKeyStore;
+//     if (apiKey) {
+//         console.log('[App.svelte] API key changed, sending to backend...');
+//         setApiKey(apiKey); // OLD LOGIC
+//         sendApiKeyToBackend().catch(error => { // OLD CALL - REMOVED
+//             console.error('[App.svelte] Error sending API key to backend:', error);
+//         });
+//     }
+// });
+  
   // --- Effect to load history for active session threads ---
   // This runs reactively whenever activeSession or threadCacheStore changes
 

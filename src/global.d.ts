@@ -22,10 +22,60 @@ declare global {
         adherence_level: number;
     } & ({ relativePath: string; text?: never } | { text: string; relativePath?: never });
 
+    // --- Model Configuration Types (Added for Model Switcher) ---
+  
+    type ProviderType =
+      | "anthropic"
+      | "google_genai"
+      | "google_vertex"
+      | "openai"
+      | "openai_compatible"
+      | "openrouter";
+  
+    // --- Provider-Specific Parameter Interfaces ---
+    interface AnthropicParams {} // No extra params needed for basic use
+  
+    interface GoogleGenAIParams {} // No extra params needed for basic use
+  
+    interface GoogleVertexParams {
+      project?: string | null;
+      location?: string | null;
+    }
+  
+    interface OpenAIParams {
+      base_url?: string | null; // Optional HttpUrl (string for simplicity here)
+      organization?: string | null;
+    }
+  
+    interface GenericOAIParams {
+      base_url: string; // Required HttpUrl (string for simplicity here)
+      default_headers?: Record<string, string> | null;
+    }
+  
+    interface OpenRouterParams {
+      // base_url is fixed on backend
+      default_headers?: Record<string, string> | null; // e.g., {"HTTP-Referer": "...", "X-Title": "..."}
+    }
+  
+    interface ModelConfig {
+      provider: ProviderType;
+      name: string;
+      // Optional provider-specific parameters (only one should be populated)
+      anthropic_params?: AnthropicParams;
+      google_genai_params?: GoogleGenAIParams;
+      google_vertex_params?: GoogleVertexParams;
+      openai_params?: OpenAIParams;
+      openai_compatible_params?: GenericOAIParams;
+      openrouter_params?: OpenRouterParams;
+    }
+  
+    // --- Existing RunConfig ---
+  
     interface RunConfig {
         configuredModules: ConfiguredConstitutionModule[];
+        model?: ModelConfig; // <-- Added optional model config
     }
-
+  
     interface CheckpointConfigurable {
         thread_id: string | null;
         runConfig: RunConfig;
